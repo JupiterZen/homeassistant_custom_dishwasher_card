@@ -2,23 +2,30 @@
 const VERSION = "0.4.2";
 // x-release-please-end
 
+// Suffixes cover both the core `home_connect` integration (original
+// upstream target) and `homeconnect_local_hass` ("Home Connect Local"),
+// whose entity ids differ on several roles. See notes/01-... in the
+// smarthome/bosch project for the entity list this was matched against.
 const SUFFIXES = {
-  connectivity: ["_connectivity"],
+  connectivity: ["_connectivity", "_connection"],
   remoteStart: ["_remote_start"],
   door: ["_door"],
   operation: ["_operation_state"],
-  finish: ["_program_finish_time"],
+  // home_connect reports an absolute ISO finish time; homeconnect_local_hass
+  // reports a remaining duration in hours instead — see _finish() below,
+  // which handles both shapes.
+  finish: ["_program_finish_time", "_remaining_program_time"],
   progress: ["_program_progress"],
   activeProgram: ["_active_program"],
   selectedProgram: ["_selected_program"],
-  delay: ["_start_in_relative"],
+  delay: ["_start_in_relative", "_start_in"],
   halfLoad: ["_half_load"],
   hygiene: ["_hygiene"],
   intensiveZone: ["_intensive_zone"],
   power: ["_power"],
   silence: ["_silence", "_silence_on_demand"],
-  varioSpeed: ["_vario_speed"],
-  stop: ["_stop_program"],
+  varioSpeed: ["_vario_speed", "_variospeedplus"],
+  stop: ["_stop_program", "_abort"],
 };
 
 const DEFAULT_PROGRAMS = {
@@ -170,11 +177,12 @@ class DishwasherCard extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "config/entity_registry/list_for_display" });
       const registry = Array.isArray(result) ? result : result?.entities || [];
+      const SUPPORTED_PLATFORMS = ["home_connect", "home_connect_alt", "homeconnect_ws"];
       const ids = registry
         .filter((entry) => {
           const device = entry.di || entry.device_id;
           const platform = entry.pl || entry.platform;
-          return device === this._config.device_id && (!platform || platform === "home_connect");
+          return device === this._config.device_id && (!platform || SUPPORTED_PLATFORMS.includes(platform));
         })
         .map((entry) => entry.ei || entry.entity_id)
         .filter(Boolean);
@@ -238,9 +246,14 @@ class DishwasherCard extends HTMLElement {
   }
 
   _finish() {
-    const value = this._state("finish")?.state;
+    const entity = this._state("finish");
+    const value = entity?.state;
     if (!value || ["unknown", "unavailable", "none"].includes(value)) return "";
-    const date = new Date(value);
+    // homeconnect_local_hass reports a remaining duration (hours), not an
+    // absolute finish time — convert it before falling through to the
+    // home_connect ISO-timestamp path below.
+    const isDuration = entity?.attributes?.device_class === "duration" || !Number.isNaN(Number(value));
+    const date = isDuration ? new Date(Date.now() + Number(value) * 3600000) : new Date(value);
     if (Number.isNaN(date.getTime())) return "";
     return date.toLocaleTimeString(this._language === "de" ? "de-CH" : "en-GB", {
       hour: "2-digit",
@@ -333,6 +346,11 @@ class DishwasherCard extends HTMLElement {
 
   _delayControl(running) {
     if (!this._config.show_delay || !this._available("delay") || running) return "";
+    // homeconnect_local_hass exposes start delay as a read-only `sensor`
+    // (hours), not a writable `number` (seconds) like home_connect — the
+    // set_value buttons below only make sense for the writable case.
+    const id = this._entities?.delay;
+    if (!id?.startsWith("number.")) return "";
     return `<section><label><ha-icon icon="mdi:clock-start"></ha-icon>${this._text.delay}</label><div class="segments"><button data-delay="0">${this._text.now}</button><button data-delay="3600">+1 h</button><button data-delay="10800">+3 h</button></div></section>`;
   }
 
