@@ -187,9 +187,20 @@ class DishwasherCard extends HTMLElement {
         .map((entry) => entry.ei || entry.entity_id)
         .filter(Boolean);
 
+      // Some appliances expose "door" under two domains — a binary_sensor
+      // (on/off) and a sensor (open/closed/locked, matching what _door()
+      // below expects). Prefer the sensor deterministically instead of
+      // relying on registry order (confirmed on the local vaatwasser:
+      // registry order picked the binary_sensor, which _door() can't
+      // interpret — the pill silently always showed "closed").
+      const DOMAIN_PREFERENCE = { door: ["sensor.", "binary_sensor."] };
       this._entities = {};
       for (const [key, suffixes] of Object.entries(SUFFIXES)) {
-        const id = ids.find((candidate) => suffixes.some((suffix) => candidate.endsWith(suffix)));
+        const matches = ids.filter((candidate) => suffixes.some((suffix) => candidate.endsWith(suffix)));
+        const preference = DOMAIN_PREFERENCE[key];
+        const id = preference
+          ? preference.map((domain) => matches.find((m) => m.startsWith(domain))).find(Boolean) || matches[0]
+          : matches[0];
         if (id) this._entities[key] = id;
       }
     } catch (error) {
@@ -262,9 +273,14 @@ class DishwasherCard extends HTMLElement {
   }
 
   _door() {
+    // Handles both shapes: a sensor with open/closed/locked strings
+    // (preferred, see DOMAIN_PREFERENCE in _discover()) and a plain
+    // binary_sensor with on/off, in case a config maps that in manually.
     const state = this._state("door")?.state;
-    if (state === "open") return { label: this._text.open, icon: "mdi:door-open", tone: "warning" };
-    if (state === "locked") return { label: this._text.locked, icon: "mdi:door-closed-lock", tone: "good" };
+    const isBinary = this._entities?.door?.startsWith("binary_sensor.");
+    const open = isBinary ? state === "on" : state === "open";
+    if (open) return { label: this._text.open, icon: "mdi:door-open", tone: "warning" };
+    if (!isBinary && state === "locked") return { label: this._text.locked, icon: "mdi:door-closed-lock", tone: "good" };
     return { label: this._text.closed, icon: "mdi:door-closed", tone: "muted" };
   }
 
