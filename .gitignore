@@ -1,5 +1,7 @@
-node_modules/
-coverage/
-reports/
-.stryker-tmp/
+**/.DS_Store
+.DS_Store
 .ci/
+.stryker-tmp/
+coverage/
+node_modules/
+reports/
